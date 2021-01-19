@@ -20,8 +20,10 @@
 #ifndef _GST_DALSA_SRC_H_
 #define _GST_DALSA_SRC_H_
 
+#define NUM_BUF	8
+
 #include <gst/base/gstpushsrc.h>
-//#include "gevapi.h"				//!< GEV lib definitions.
+#include "gevapi.h"				//!< GEV lib definitions.
 G_BEGIN_DECLS
 
 #define GST_TYPE_DALSA_SRC   (gst_dalsa_src_get_type())
@@ -116,6 +118,8 @@ struct _GstDalsaSrc
   gint total_timeouts;
   GstClockTime duration;
   GstClockTime last_frame_time;
+
+  PUINT8 bufAddress[NUM_BUF];
 };
 
 struct _GstDalsaSrcClass

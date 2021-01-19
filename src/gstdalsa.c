@@ -55,7 +55,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_dalsa_src_debug);
 #define MAX_NETIF					8
 #define MAX_CAMERAS_PER_NETIF	32
 #define MAX_CAMERAS		(MAX_NETIF * MAX_CAMERAS_PER_NETIF)
-#define NUM_BUF	8
+
 void *m_latestBuffer = NULL;
 
 /* prototypes */
@@ -383,7 +383,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 			UINT64 size;
 			UINT64 payload_size;
 			int numBuffers = NUM_BUF;
-			PUINT8 bufAddress[NUM_BUF];
+			//PUINT8 src->bufAddress[NUM_BUF];
 			GEV_CAMERA_HANDLE handle = NULL;
 			UINT32 pixFormat = 0;
 			UINT32 pixDepth = 0;
@@ -411,6 +411,10 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 				GevGetFeatureValue(handle, "Width", &type, sizeof(width), &width);
 				GevGetFeatureValue(handle, "Height", &type, sizeof(height), &height);
 				GevGetFeatureValue(handle, "PixelFormat", &type, sizeof(format), &format);
+			}
+			else{
+				GST_ERROR_OBJECT(src, "Could not open camera %d with status %d", src->cameraID, status);
+				return FALSE;
 			}
 			// Get the low part of the MAC address (use it as part of a unique file name for saving images).
 			// Generate a unique base name to be used for saving image files
@@ -471,11 +475,11 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 					size = (payload_size > size) ? payload_size : size;
 					for (i = 0; i < numBuffers; i++)
 					{
-						bufAddress[i] = (PUINT8)malloc(size);
-						memset(bufAddress[i], 0, size);
+						src->bufAddress[i] = (PUINT8)malloc(size);
+						memset(src->bufAddress[i], 0, size);
 					}
 					// Initialize a transfer with asynchronous buffer handling.
-					status = GevInitializeTransfer( handle, Asynchronous, size, numBuffers, bufAddress);
+					status = GevInitializeTransfer( handle, Asynchronous, size, numBuffers, src->bufAddress);
 					pixDepth = GevGetPixelDepthInBits(convertedGevFormat);
 					//context.format = Convert_SaperaFormat_To_X11( pixFormat);
 					src->format = 0x00000001; //Mono
@@ -490,7 +494,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 
 					for (i = 0; i < numBuffers; i++)
 					{
-						memset(bufAddress[i], 0, size);
+						memset(src->bufAddress[i], 0, size);
 					}
 					status = GevStartTransfer( handle, -1);
 					if (status != 0) return FALSE; 
@@ -515,6 +519,15 @@ gst_dalsa_src_stop (GstBaseSrc * bsrc)
 
 	GST_DEBUG_OBJECT (src, "stop");
 	GevStopTransfer(src->camHandle);
+
+	GevAbortTransfer(src->camHandle);
+	GevFreeTransfer(src->camHandle);
+
+	for (int i = 0; i < NUM_BUF; i++)
+	{	
+		free(src->bufAddress[i]);
+	}
+
 	GevCloseCamera(&src->camHandle);
 	gst_dalsa_src_reset (src);
 	// Close down the API.
