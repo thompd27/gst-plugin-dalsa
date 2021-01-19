@@ -37,7 +37,7 @@
 //#define OVERRIDE_FILL  !!! NOT IMPLEMENTED !!!
 #define OVERRIDE_CREATE
 
-#include <unistd.h> // for usleep
+//#include <unistd.h> // for usleep
 #include <string.h> // for memcpy
 #include <math.h>  // for pow
 #ifdef HAVE_CONFIG_H
@@ -193,7 +193,7 @@ init_properties(GstDalsaSrc * src)
   src->bytesPerPixel = 1;
   src->binning = 1;
   src->n_frames = 0;
-  src->framerate = 31;
+  src->framerate = 30;
   src->last_frame_time = 0;
   src->pitch = src->width * src->bytesPerPixel;
   src->gst_stride = src->pitch;
@@ -391,7 +391,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 			
 			//====================================================================
 			// Open the camera.
-			status = GevOpenCamera( &pCamera[camIndex], GevControlMode, &handle);
+			status = GevOpenCamera( &pCamera[src->cameraID], GevControlMode, &handle);
 			if (status == 0)
 			{
 				//=================================================================
@@ -415,7 +415,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 			// Get the low part of the MAC address (use it as part of a unique file name for saving images).
 			// Generate a unique base name to be used for saving image files
 			// based on the last 3 octets of the MAC address.
-			macLow = pCamera[camIndex].macLow;
+			macLow = pCamera[src->cameraID].macLow;
 			macLow &= 0x00FFFFFF;
 			snprintf(uniqueName, sizeof(uniqueName), "img_%06x", macLow); 
 			
@@ -582,13 +582,15 @@ gst_dalsa_src_create (GstPushSrc * psrc, GstBuffer ** buf)
 
 	GEV_BUFFER_OBJECT *img = NULL;
 	GEV_STATUS status = 0;
-	
+	gboolean test = FALSE;
+while (!test){
 	// Wait for images to be received
 	status = GevWaitForNextImage(src->camHandle, &img, 1000);
 	if ((img != NULL) && (status == GEVLIB_OK))
-	{
+	{	
 		if (img->status == 0)
 		{
+			test = TRUE;
 				// Create a new buffer for the image
 			*buf = gst_buffer_new_and_alloc (src->height * src->width * src->bytesPerPixel);
 
@@ -618,16 +620,20 @@ gst_dalsa_src_create (GstPushSrc * psrc, GstBuffer ** buf)
 				if (G_UNLIKELY(src->n_frames >= psrc->parent.num_buffers))
 			return GST_FLOW_EOS;
 
-	return GST_FLOW_OK;
+			return GST_FLOW_OK;
 
 		}
 		else
 		{
-			return GST_FLOW_OK;
+			GST_DEBUG_OBJECT (src, "Image Incomplete***********************!\n\n\n\n");
+			//return GST_FLOW_ERROR;
 			// Image had an error (incomplete (timeout/overflow/lost)).
 			// Do any handling of this condition necessary.
 		}
 	}
+}
+GST_DEBUG_OBJECT (src, "Capture Error!");
+	return GST_FLOW_OK;
 }
 #endif // OVERRIDE_CREATE
 

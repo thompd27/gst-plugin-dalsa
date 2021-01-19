@@ -21,7 +21,7 @@
 #define _GST_DALSA_SRC_H_
 
 #include <gst/base/gstpushsrc.h>
-#include "gevapi.h"				//!< GEV lib definitions.
+//#include "gevapi.h"				//!< GEV lib definitions.
 G_BEGIN_DECLS
 
 #define GST_TYPE_DALSA_SRC   (gst_dalsa_src_get_type())
