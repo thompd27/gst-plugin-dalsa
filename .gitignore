@@ -30,3 +30,5 @@ src/.vscode/
 stamp-h1
 
 src/build/
+
+.vscode/

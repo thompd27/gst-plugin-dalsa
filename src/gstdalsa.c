@@ -1,5 +1,5 @@
 /* GStreamer Teledyne Dalsa Plugin
- * Copyright (C) 2019 Embry-Riddle Aeronautical University
+ * Copyright (C) 2021 David Thompson, Embry-Riddle Aeronautical University
  * 
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -19,6 +19,7 @@
  * Author: D Thompson
  *
  */
+
 /**
  * SECTION:element-GstDalsa_src
  *
@@ -33,16 +34,9 @@
  * </refsect2>
  */
 
-// Which functions of the base class to override. Create must alloc and fill the buffer. Fill just needs to fill it
-//#define OVERRIDE_FILL  !!! NOT IMPLEMENTED !!!
-#define OVERRIDE_CREATE
 
-//#include <unistd.h> // for usleep
 #include <string.h> // for memcpy
 #include <math.h>  // for pow
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
 
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
@@ -71,12 +65,7 @@ static gboolean gst_dalsa_src_stop (GstBaseSrc * src);
 static GstCaps *gst_dalsa_src_get_caps (GstBaseSrc * src, GstCaps * filter);
 static gboolean gst_dalsa_src_set_caps (GstBaseSrc * src, GstCaps * caps);
 
-#ifdef OVERRIDE_CREATE
-	static GstFlowReturn gst_dalsa_src_create (GstPushSrc * src, GstBuffer ** buf);
-#endif
-#ifdef OVERRIDE_FILL
-	static GstFlowReturn gst_dalsa_src_fill (GstPushSrc * src, GstBuffer * buf);
-#endif
+static GstFlowReturn gst_dalsa_src_create (GstPushSrc * src, GstBuffer ** buf);
 
 //static GstCaps *gst_dalsa_src_create_caps (GstDalsaSrc * src);
 static void gst_dalsa_src_reset (GstDalsaSrc * src);
@@ -84,6 +73,7 @@ enum
 {
 	PROP_0,
 	PROP_CAMERA,
+	PROP_IP,
 	PROP_WIDTH,
 	PROP_HEIGHT
 };
@@ -114,6 +104,7 @@ enum
 #define DEFAULT_PROP_GAMMA			    1.5
 #define DEFAULT_PROP_WIDTH 				640
 #define DEFAULT_PROP_HEIGHT			    480
+#define DEFAULT_PROP_IP					0
 
 #define DEFAULT_GST_VIDEO_FORMAT GST_VIDEO_FORMAT_GRAY8
 #define DEFAULT_FLYCAP_VIDEO_FORMAT FC2_PIXEL_FORMAT_RGB8
@@ -170,17 +161,15 @@ gst_dalsa_src_class_init (GstDalsaSrcClass * klass)
 	gstbasesrc_class->get_caps = GST_DEBUG_FUNCPTR (gst_dalsa_src_get_caps);
 	gstbasesrc_class->set_caps = GST_DEBUG_FUNCPTR (gst_dalsa_src_set_caps);
 
-#ifdef OVERRIDE_CREATE
 	gstpushsrc_class->create = GST_DEBUG_FUNCPTR (gst_dalsa_src_create);
-	GST_DEBUG ("Using gst_dalsa_src_create.");
-#endif
-#ifdef OVERRIDE_FILL
-	gstpushsrc_class->fill   = GST_DEBUG_FUNCPTR (gst_dalsa_src_fill);
-	GST_DEBUG ("Using gst_dalsa_src_fill.");
-#endif
+
 	//camera id property
 	g_object_class_install_property (gobject_class, PROP_CAMERA,
 		g_param_spec_int("camera-id", "Camera ID", "Camera ID to open.", 0,7, DEFAULT_PROP_CAMERA,
+		 (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING)));
+	//camera IP address property
+	g_object_class_install_property (gobject_class, PROP_IP,
+		g_param_spec_ulong("camera-ip", "Camera IP", "Camera IP address to open, formatted as unsigned long. (Optional. Use instead of camera-id)", 0, 4294967294, DEFAULT_PROP_IP,
 		 (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_PLAYING)));
 }
 
@@ -198,6 +187,7 @@ init_properties(GstDalsaSrc * src)
   src->pitch = src->width * src->bytesPerPixel;
   src->gst_stride = src->pitch;
   src->cameraID = DEFAULT_PROP_CAMERA;
+  src->cameraIP = DEFAULT_PROP_IP;
 
 }
 
@@ -221,7 +211,8 @@ gst_dalsa_src_reset (GstDalsaSrc * src)
 	src->n_frames = 0;
 	src->total_timeouts = 0;
 	src->last_frame_time = 0;
-	src->cameraID = 0;
+	src->cameraID = DEFAULT_PROP_CAMERA;
+	src->cameraIP = DEFAULT_PROP_IP;
 }
 
 void
@@ -236,6 +227,10 @@ gst_dalsa_src_set_property (GObject * object, guint property_id,
 	case PROP_CAMERA:
 		src->cameraID = g_value_get_int (value);
 		GST_DEBUG_OBJECT (src, "camera id: %d", src->cameraID);
+		break;
+	case PROP_IP:
+		src->cameraIP = g_value_get_ulong (value);
+		GST_DEBUG_OBJECT (src, "camera ip: %d", src->cameraIP);
 		break;
 	case PROP_WIDTH:
 		break;
@@ -299,7 +294,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 	GST_DEBUG_OBJECT (src, "start");
 	
 	GEV_DEVICE_INTERFACE  pCamera[MAX_CAMERAS] = {0};
-	GEV_STATUS status;
+	GEV_STATUS status = 1;
 	int numCamera = 0;
 	int camIndex = 0;
    	//X_VIEW_HANDLE  View = NULL;
@@ -362,7 +357,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 	// Select the first camera found (unless the command line has a parameter = the camera index)
 	if (numCamera != 0)
 	{
-		if (src->cameraID >= (int)numCamera)
+		if (src->cameraID >= (int)numCamera)                  
 		{
 			//GST_ERROR(dalsa,"Camera index out of range");
 			return FALSE;
@@ -388,10 +383,32 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 			UINT32 pixFormat = 0;
 			UINT32 pixDepth = 0;
 			UINT32 convertedGevFormat = 0;
-			
+			//src->camHandle = handle;
 			//====================================================================
 			// Open the camera.
-			status = GevOpenCamera( &pCamera[src->cameraID], GevControlMode, &handle);
+			if (src->cameraIP > 0){
+				GST_DEBUG_OBJECT(src, "Opening with IP");
+				status = GevOpenCameraByAddress(src->cameraIP, GevExclusiveMode, &src->camHandle);
+			}
+			else{
+				GST_DEBUG_OBJECT(src, "Opening with ID");
+				status = GevOpenCamera( &pCamera[src->cameraID], GevExclusiveMode, &src->camHandle);
+			}
+			
+			/*
+			if (status != 0){
+				GST_DEBUG_OBJECT(src, "Opening failed, retrying....");
+				GevStopTransfer(handle);
+
+				GevAbortTransfer(handle); 
+
+				GevFreeTransfer(handle);
+
+				GevCloseCamera(&handle);
+
+				status = GevOpenCamera( &pCamera[src->cameraID], GevControlMode, &handle);
+			}
+*/
 			if (status == 0)
 			{
 				//=================================================================
@@ -408,12 +425,12 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 				status = GEVLIB_OK;
 
 				// Get the camera width, height, and pixel format
-				GevGetFeatureValue(handle, "Width", &type, sizeof(width), &width);
-				GevGetFeatureValue(handle, "Height", &type, sizeof(height), &height);
-				GevGetFeatureValue(handle, "PixelFormat", &type, sizeof(format), &format);
+				GevGetFeatureValue(src->camHandle, "Width", &type, sizeof(width), &width);
+				GevGetFeatureValue(src->camHandle, "Height", &type, sizeof(height), &height);
+				GevGetFeatureValue(src->camHandle, "PixelFormat", &type, sizeof(format), &format);
 			}
 			else{
-				GST_ERROR_OBJECT(src, "Could not open camera %d with status %d", src->cameraID, status);
+				GST_ERROR_OBJECT(src, "Could not open camera %d with status %#06x", src->cameraID, status);
 				return FALSE;
 			}
 			// Get the low part of the MAC address (use it as part of a unique file name for saving images).
@@ -430,11 +447,11 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 				GEV_CAMERA_OPTIONS camOptions = {0};
 
 				// Adjust the camera interface options if desired (see the manual)
-				GevGetCameraInterfaceOptions( handle, &camOptions);
+				GevGetCameraInterfaceOptions( src->camHandle, &camOptions);
 				//camOptions.heartbeat_timeout_ms = 60000;		// For debugging (delay camera timeout while in debugger)
 				camOptions.heartbeat_timeout_ms = 5000;		// Disconnect detection (5 seconds)
 				// Write the adjusted interface options back.
-				GevSetCameraInterfaceOptions( handle, &camOptions);
+				GevSetCameraInterfaceOptions( src->camHandle, &camOptions);
 
 				// Access some features using the C-compatible functions.
 				{
@@ -442,19 +459,19 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 					char value_str[MAX_PATH] = {0};
 						
 					printf("Camera ROI set for \n\t");
-					GevGetFeatureValueAsString( handle, "Height", &type, MAX_PATH, value_str);
+					GevGetFeatureValueAsString( src->camHandle, "Height", &type, MAX_PATH, value_str);
 					printf("Height = %s\n\t", value_str);
-					GevGetFeatureValueAsString( handle, "Width", &type, MAX_PATH, value_str);
+					GevGetFeatureValueAsString( src->camHandle, "Width", &type, MAX_PATH, value_str);
 					printf("Width = %s\n\t", value_str);
 
 					//set to mono8
 					UINT32 mono_val = 0x01080001;
-					GevSetFeatureValue( handle, "PixelFormat", sizeof(UINT32), &mono_val);
+					GevSetFeatureValue( src->camHandle, "PixelFormat", sizeof(UINT32), &mono_val);
 
-					GevGetFeatureValueAsString( handle, "PixelFormat", &type, MAX_PATH, value_str);
+					GevGetFeatureValueAsString( src->camHandle, "PixelFormat", &type, MAX_PATH, value_str);
 					printf("PixelFormat (str) = %s\n\t", value_str);
 
-					GevGetFeatureValue(handle, "PixelFormat", &type, sizeof(UINT32), &val);
+					GevGetFeatureValue(src->camHandle, "PixelFormat", &type, sizeof(UINT32), &val);
 					printf("PixelFormat (val) = 0x%x\n", val);
 				}
 
@@ -464,7 +481,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 					//=================================================================
 					// Set up a grab/transfer from this camera
 					//
-					GevGetPayloadParameters( handle,  &payload_size, (UINT32 *)&type);
+					GevGetPayloadParameters( src->camHandle,  &payload_size, (UINT32 *)&type);
 					maxHeight = height;
 					maxWidth = width;
 					maxDepth = GetPixelSizeInBytes(format);
@@ -479,7 +496,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 						memset(src->bufAddress[i], 0, size);
 					}
 					// Initialize a transfer with asynchronous buffer handling.
-					status = GevInitializeTransfer( handle, Asynchronous, size, numBuffers, src->bufAddress);
+					status = GevInitializeTransfer( src->camHandle, Asynchronous, size, numBuffers, src->bufAddress);
 					pixDepth = GevGetPixelDepthInBits(convertedGevFormat);
 					//context.format = Convert_SaperaFormat_To_X11( pixFormat);
 					src->format = 0x00000001; //Mono
@@ -488,7 +505,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 					src->convertFormat = FALSE;
 										// Create a thread to receive images from the API and display them.
 					//context.View = View;
-					src->camHandle = handle;
+					
 					src->exit = FALSE;
 		   			//pthread_create(&tid, NULL, ImageDisplayThread, &context); 
 
@@ -496,7 +513,7 @@ gst_dalsa_src_start (GstBaseSrc * bsrc)
 					{
 						memset(src->bufAddress[i], 0, size);
 					}
-					status = GevStartTransfer( handle, -1);
+					status = GevStartTransfer( src->camHandle, -1);
 					if (status != 0) return FALSE; 
 				}
 			}
@@ -520,7 +537,8 @@ gst_dalsa_src_stop (GstBaseSrc * bsrc)
 	GST_DEBUG_OBJECT (src, "stop");
 	GevStopTransfer(src->camHandle);
 
-	GevAbortTransfer(src->camHandle);
+	GevAbortTransfer(src->camHandle); 
+
 	GevFreeTransfer(src->camHandle);
 
 	for (int i = 0; i < NUM_BUF; i++)
@@ -586,7 +604,6 @@ gst_dalsa_src_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
 }
 
 //Grabs next image from camera and puts it into a gstreamer buffer
-#ifdef OVERRIDE_CREATE
 static GstFlowReturn
 gst_dalsa_src_create (GstPushSrc * psrc, GstBuffer ** buf)
 {
@@ -648,7 +665,6 @@ while (!test){
 GST_DEBUG_OBJECT (src, "Capture Error!");
 	return GST_FLOW_OK;
 }
-#endif // OVERRIDE_CREATE
 
 static gboolean
 plugin_init (GstPlugin * plugin)
@@ -666,7 +682,7 @@ plugin_init (GstPlugin * plugin)
    appropriate for your external plugin package. */
    
 #ifndef VERSION
-#define VERSION "0.0.1"
+#define VERSION "0.0.2"
 #endif
 #ifndef PACKAGE
 #define PACKAGE "GST DALSA"

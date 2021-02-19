@@ -65,6 +65,7 @@ struct _GstDalsaSrc
   unsigned int height;
   unsigned int bytesPerPixel;
   unsigned int pitch;
+  ulong cameraIP;
 /*
   // device
   gboolean cameraPresent;
