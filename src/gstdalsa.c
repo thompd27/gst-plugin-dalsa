@@ -41,7 +41,7 @@
 #include <gst/gst.h>
 #include <gst/base/gstpushsrc.h>
 #include <gst/video/video.h>
-#include <gstdalsa.h>
+#include "gstdalsa.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_dalsa_src_debug);
 #define GST_CAT_DEFAULT gst_dalsa_src_debug
